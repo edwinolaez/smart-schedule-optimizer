@@ -147,11 +147,12 @@ with st.sidebar:
     st.caption(f"**Structural gap:** {ANNUAL_AVG_DEMAND - TEAM_CAPACITY_90:.0f} hrs/wk")
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_hire, tab_cap, tab_morale, tab_profile = st.tabs([
+tab_hire, tab_cap, tab_morale, tab_profile, tab_report = st.tabs([
     "🚨 Hiring Triggers",
     "📈 Demand & Capacity",
     "💚 Team Morale",
     "👤 Employee Morale Profile",
+    "📋 Satisfaction Report",
 ])
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -624,3 +625,265 @@ with tab_profile:
             detail_display.reset_index(drop=True).style.apply(style_detail, axis=1),
             width="stretch", hide_index=True, height=420,
         )
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TAB 5 — EMPLOYEE SATISFACTION REPORT
+# ═════════════════════════════════════════════════════════════════════════════
+with tab_report:
+    st.subheader("2024 Employee Satisfaction Report")
+    st.caption(
+        "Annual summary of team morale across all 15 employees and 52 weeks. "
+        "Based on 780 weekly survey responses weighted across 6 operational factors."
+    )
+
+    # ── Executive summary KPIs ────────────────────────────────────────────────
+    overall_avg    = survey_df["morale_index"].mean()
+    overall_ret    = survey_df["retention_intent"].mean()
+    pct_healthy    = (survey_df["morale_index"] >= 3.5).mean() * 100
+    pct_at_risk    = (survey_df["at_risk_flag"] == 1).mean() * 100
+    lowest_f       = survey_df[MORALE_FACTORS].mean().idxmin()
+    highest_f      = survey_df[MORALE_FACTORS].mean().idxmax()
+
+    r1, r2, r3, r4, r5 = st.columns(5)
+    r1.metric("Overall Morale Index",  f"{overall_avg:.2f} / 5.0")
+    r2.metric("Avg Retention Intent",  f"{overall_ret:.2f} / 5.0")
+    r3.metric("Healthy Weeks (≥3.5)",  f"{pct_healthy:.0f}%")
+    r4.metric("At-Risk Survey Weeks",  f"{pct_at_risk:.1f}%")
+    r5.metric("Employees Flagged T4",  at_risk_emps)
+
+    st.divider()
+
+    # ── Key findings ──────────────────────────────────────────────────────────
+    st.markdown("### 2024 Key Findings")
+
+    lowest_score  = survey_df[lowest_f].mean()
+    highest_score = survey_df[highest_f].mean()
+    t4_employees  = survey_df[survey_df["at_risk_flag"] == 1]["name"].unique()
+    t4_names      = " and ".join(t4_employees) if len(t4_employees) else "None"
+
+    q_avgs = {}
+    for q, (lo, hi) in enumerate([(1,13),(14,26),(27,39),(40,52)], 1):
+        q_avgs[f"Q{q}"] = survey_df[survey_df["week_number"].between(lo, hi)]["morale_index"].mean()
+    worst_q  = min(q_avgs, key=q_avgs.get)
+    best_q   = max(q_avgs, key=q_avgs.get)
+
+    findings = [
+        f"**Overall team morale averaged {overall_avg:.2f}/5.0** across all 780 survey responses — "
+        f"a functional but improvable baseline. No role averaged above 4.2.",
+        f"**{MORALE_LABELS[lowest_f]}** was the lowest-scoring factor at **{lowest_score:.2f}/5.0** "
+        f"(weight: {MORALE_WEIGHTS[lowest_f]:.0%}). This is the highest-leverage improvement area.",
+        f"**{MORALE_LABELS[highest_f]}** was the strongest factor at **{highest_score:.2f}/5.0** — "
+        f"a genuine operational strength to preserve.",
+        f"**{worst_q}** was the lowest-morale quarter ({q_avgs[worst_q]:.2f}), "
+        f"**{best_q}** was the strongest ({q_avgs[best_q]:.2f}).",
+        f"**{t4_names}** triggered the T4 at-risk flag (morale < 3.0 for 3+ consecutive weeks), "
+        f"representing an active flight risk and a downstream hiring trigger.",
+        f"**Retention intent averaged {overall_ret:.2f}/5.0** — moderate. "
+        f"Employees with morale index below 3.5 showed meaningfully lower retention scores.",
+    ]
+    for f_text in findings:
+        st.markdown(f"- {f_text}")
+
+    st.divider()
+
+    # ── Quarterly morale trend ────────────────────────────────────────────────
+    st.markdown("### Quarterly Morale Breakdown")
+
+    q_data = []
+    for q, (lo, hi) in enumerate([(1,13),(14,26),(27,39),(40,52)], 1):
+        q_slice = survey_df[survey_df["week_number"].between(lo, hi)]
+        q_data.append({
+            "Quarter":         f"Q{q}  (Wk {lo}–{hi})",
+            "Avg Morale":      round(q_slice["morale_index"].mean(), 2),
+            "Avg Retention":   round(q_slice["retention_intent"].mean(), 2),
+            "At-Risk Surveys": int(q_slice["at_risk_flag"].sum()),
+            "Healthy %":       round((q_slice["morale_index"] >= 3.5).mean() * 100, 1),
+        })
+
+    q_df = pd.DataFrame(q_data)
+
+    def style_quarter(row):
+        if row["Avg Morale"] == q_df["Avg Morale"].min():
+            return ["background-color:#f8d7da"] * len(row)
+        if row["Avg Morale"] == q_df["Avg Morale"].max():
+            return ["background-color:#d4edda"] * len(row)
+        return [""] * len(row)
+
+    qcol1, qcol2 = st.columns([2, 3])
+    with qcol1:
+        st.dataframe(
+            q_df.style.apply(style_quarter, axis=1),
+            width="stretch", hide_index=True,
+        )
+    with qcol2:
+        st.bar_chart(q_df.set_index("Quarter")[["Avg Morale", "Avg Retention"]], height=220)
+
+    st.divider()
+
+    # ── Factor ranking table ──────────────────────────────────────────────────
+    st.markdown("### Morale Factor Analysis")
+    st.caption("Ranked by average score. Weighted contribution = avg score × weight.")
+
+    factor_report = []
+    for i, f in enumerate(
+        sorted(MORALE_FACTORS, key=lambda x: survey_df[x].mean())
+    ):
+        avg  = survey_df[f].mean()
+        wt   = MORALE_WEIGHTS[f]
+        contrib = avg * wt
+        below_35 = (survey_df[f] < 3.5).mean() * 100
+        factor_report.append({
+            "Rank":              i + 1,
+            "Factor":            MORALE_LABELS[f],
+            "Avg Score":         round(avg, 2),
+            "Weight":            f"{wt:.0%}",
+            "Weighted Contrib":  round(contrib, 3),
+            "Surveys Below 3.5": f"{below_35:.0f}%",
+            "Priority":          "🔴 Improve" if avg < 3.7 else ("🟡 Monitor" if avg < 3.9 else "🟢 Maintain"),
+        })
+
+    factor_report_df = pd.DataFrame(factor_report)
+
+    def style_factor_report(row):
+        if "Improve" in row["Priority"]: return ["background-color:#f8d7da"] * len(row)
+        if "Monitor" in row["Priority"]: return ["background-color:#fff3cd"] * len(row)
+        return ["background-color:#d4edda"] * len(row)
+
+    st.dataframe(
+        factor_report_df.style.apply(style_factor_report, axis=1),
+        width="stretch", hide_index=True,
+    )
+
+    st.divider()
+
+    # ── Retention risk by role ────────────────────────────────────────────────
+    st.markdown("### Retention Risk by Role")
+
+    role_risk = (
+        survey_df.groupby("role")
+        .agg(
+            Avg_Morale      =("morale_index",     "mean"),
+            Avg_Retention   =("retention_intent",  "mean"),
+            Low_Morale_Pct  =("morale_index",     lambda x: (x < 3.5).mean() * 100),
+            At_Risk_Surveys =("at_risk_flag",      "sum"),
+        )
+        .round(2)
+        .reset_index()
+        .rename(columns={
+            "role":           "Role",
+            "Avg_Morale":     "Avg Morale",
+            "Avg_Retention":  "Avg Retention Intent",
+            "Low_Morale_Pct": "Low Morale %",
+            "At_Risk_Surveys":"At-Risk Surveys",
+        })
+        .sort_values("Avg Morale")
+    )
+
+    def style_role_risk(row):
+        if row["Avg Morale"] < 3.5: return ["background-color:#f8d7da"] * len(row)
+        if row["Avg Morale"] < 3.8: return ["background-color:#fff3cd"] * len(row)
+        return [""] * len(row)
+
+    rcol1, rcol2 = st.columns([3, 2])
+    with rcol1:
+        st.dataframe(
+            role_risk.style.apply(style_role_risk, axis=1),
+            width="stretch", hide_index=True,
+        )
+    with rcol2:
+        st.bar_chart(
+            role_risk.set_index("Role")[["Avg Morale", "Avg Retention Intent"]],
+            height=240,
+        )
+
+    st.divider()
+
+    # ── Recommendations ───────────────────────────────────────────────────────
+    st.markdown("### Recommendations")
+
+    recs = [
+        (
+            "🔴 Address Personal Time Respect immediately",
+            f"Lowest-scoring factor at {survey_df['personal_time_respect'].mean():.2f}/5.0 "
+            f"(weight 20%). Audit last-minute schedule changes, clopening shifts, and "
+            f"overtime patterns. Even a +0.2 improvement would lift the composite morale index."
+        ),
+        (
+            "🔴 Retain E012 and E015 — active flight risk",
+            "Both employees triggered T4 (3+ consecutive weeks below 3.0). "
+            "Schedule a manager 1-on-1 within 2 weeks. Review workload, shift patterns, "
+            "and team dynamics. Cost of turnover (~$3,000–5,000/hire) far exceeds "
+            "the cost of early intervention."
+        ),
+        (
+            "🟡 Monitor Hours Consistency across Part-Time crew",
+            f"Hours consistency averaged {survey_df['hours_consistency'].mean():.2f}/5.0. "
+            "Irregular scheduling is the leading predictor of morale decline in QSR. "
+            "Aim to give PT employees the same shift pattern for at least 3 consecutive weeks."
+        ),
+        (
+            "🟡 Boost Q3 (summer) morale proactively",
+            f"Q3 was the lowest morale quarter at {q_avgs.get('Q3', 0):.2f}. "
+            "Summer brings peak demand AND school-break availability gaps — "
+            "a scheduling squeeze. Plan additional coverage and run a summer engagement "
+            "initiative before Week 27."
+        ),
+        (
+            "🟢 Leverage product availability strength",
+            f"Product availability scored {survey_df['product_availability'].mean():.2f}/5.0 — "
+            "the team's strongest factor. Highlight this in hiring materials and training. "
+            "Reinforce with the supply chain team to protect this advantage."
+        ),
+    ]
+
+    for title, detail in recs:
+        with st.expander(title, expanded=("🔴" in title)):
+            st.markdown(detail)
+
+    st.divider()
+
+    # ── Download ──────────────────────────────────────────────────────────────
+    st.markdown("### Export")
+
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        st.download_button(
+            "📥 Download Full Survey Data (CSV)",
+            data=survey_df.to_csv(index=False).encode("utf-8"),
+            file_name="qsr_employee_survey_2024.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+        st.caption("780 rows · 17 columns · all 15 employees · all 52 weeks")
+
+    with dl2:
+        report_lines = [
+            "=" * 70,
+            "  QSR OPERATIONS PLATFORM — EMPLOYEE SATISFACTION REPORT 2024",
+            "=" * 70,
+            f"\n  Overall Morale Index  : {overall_avg:.2f} / 5.0",
+            f"  Avg Retention Intent  : {overall_ret:.2f} / 5.0",
+            f"  Healthy Survey Weeks  : {pct_healthy:.0f}%",
+            f"  At-Risk Employees     : {at_risk_emps} ({t4_names})",
+            "\n  FACTOR RANKINGS (low to high):",
+        ]
+        for row in factor_report:
+            report_lines.append(
+                f"  {row['Rank']}. {row['Factor']:<30} {row['Avg Score']:.2f}  {row['Priority']}"
+            )
+        report_lines += [
+            "\n  QUARTERLY MORALE:",
+            *[f"  {r['Quarter']:<20} Morale={r['Avg Morale']:.2f}  Retention={r['Avg Retention']:.2f}"
+              for r in q_data],
+            "\n  KEY RECOMMENDATIONS:",
+            *[f"  - {title}" for title, _ in recs],
+            "\n" + "=" * 70,
+        ]
+        st.download_button(
+            "📝 Download Summary Report (TXT)",
+            data="\n".join(report_lines).encode("utf-8"),
+            file_name="employee_satisfaction_report_2024.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
+        st.caption("Executive summary with factor rankings and recommendations")

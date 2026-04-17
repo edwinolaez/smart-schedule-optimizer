@@ -134,6 +134,16 @@ def load_optimizer():
 
 opt = load_optimizer()
 
+# ── Load customer survey (cached) ─────────────────────────────────────────────
+@st.cache_data
+def load_csat():
+    path = os.path.join(ROOT, "data", "qsr_customer_survey.csv")
+    df   = pd.read_csv(path)
+    df["date"] = pd.to_datetime(df["date"])
+    return df
+
+csat_df = load_csat()
+
 # ── Session state defaults ────────────────────────────────────────────────────
 today = date.today()
 _defaults = {
@@ -289,6 +299,122 @@ if week_hols or week_lws:
     for d in week_lws:
         cols_hol[ci].warning(f"📅 **{d.strftime('%A %b %d')}**\nLong Weekend (+12% suggested)")
         ci += 1
+
+# ═════════════════════════════════════════════════════════════════════════════
+# CUSTOMER SATISFACTION — historical 2024 data for selected ISO week
+# ═════════════════════════════════════════════════════════════════════════════
+iso_week  = week_start.isocalendar()[1]
+week_csat = csat_df[csat_df["iso_week"] == iso_week]
+
+CSAT_FACTORS = {
+    "Speed":        "speed_of_service",
+    "Friendliness": "staff_friendliness",
+    "Accuracy":     "order_accuracy",
+    "Cleanliness":  "cleanliness",
+    "Availability": "product_availability",
+}
+
+with st.expander(
+    f"⭐ Customer Satisfaction — ISO Week {iso_week}  ·  "
+    f"{len(week_csat)} surveys  ·  "
+    f"Avg CSAT {week_csat['csat_score'].mean():.2f}/5.0"
+    if not week_csat.empty else
+    f"⭐ Customer Satisfaction — ISO Week {iso_week}  ·  No data",
+    expanded=False,
+):
+    if week_csat.empty:
+        st.info("No customer survey data found for this ISO week.")
+    else:
+        st.caption(
+            f"Historical 2024 data — {len(week_csat)} surveys across "
+            f"{week_csat['date'].dt.strftime('%b %d').min()} – "
+            f"{week_csat['date'].dt.strftime('%b %d').max()}"
+        )
+
+        # ── KPI strip ─────────────────────────────────────────────────────────
+        n_promo   = (week_csat["nps_flag"] == "Promoter").sum()
+        n_passive = (week_csat["nps_flag"] == "Passive").sum()
+        n_detract = (week_csat["nps_flag"] == "Detractor").sum()
+        total_s   = len(week_csat)
+        nps_score = round(n_promo / total_s * 100 - n_detract / total_s * 100)
+        avg_csat  = week_csat["csat_score"].mean()
+        avg_speed = week_csat["speed_of_service"].mean()
+        avg_acc   = week_csat["order_accuracy"].mean()
+        avg_ret   = week_csat["likelihood_to_return"].mean()
+
+        kc1, kc2, kc3, kc4, kc5 = st.columns(5)
+        kc1.metric("Avg CSAT",          f"{avg_csat:.2f} / 5.0")
+        kc2.metric("Speed of Service",  f"{avg_speed:.2f} / 5.0")
+        kc3.metric("Order Accuracy",    f"{avg_acc:.2f} / 5.0")
+        kc4.metric("Likelihood Return", f"{avg_ret:.1f} / 10")
+        kc5.metric("NPS Score",         nps_score,
+                   help="Net Promoter Score = %Promoters − %Detractors")
+
+        # ── NPS + factor breakdown ─────────────────────────────────────────────
+        col_nps, col_fac = st.columns(2)
+
+        with col_nps:
+            st.caption("**NPS Breakdown**")
+            st.markdown(
+                f"🟢 Promoters: **{n_promo}** ({n_promo/total_s*100:.0f}%)  ·  "
+                f"🟡 Passive: **{n_passive}** ({n_passive/total_s*100:.0f}%)  ·  "
+                f"🔴 Detractors: **{n_detract}** ({n_detract/total_s*100:.0f}%)"
+            )
+            nps_color = "normal" if nps_score >= 0 else "inverse"
+            if nps_score >= 20:
+                st.success(f"NPS {nps_score} — Good")
+            elif nps_score >= 0:
+                st.warning(f"NPS {nps_score} — Needs improvement")
+            else:
+                st.error(f"NPS {nps_score} — Critical")
+
+            st.caption("**CSAT by Shift Period**")
+            shift_csat = (
+                week_csat.groupby("shift_period")["csat_score"]
+                .mean().round(2).reset_index()
+                .rename(columns={"shift_period": "Shift", "csat_score": "Avg CSAT"})
+            )
+            st.dataframe(shift_csat, hide_index=True, use_container_width=True)
+
+        with col_fac:
+            st.caption("**Service Factor Scores**")
+            factor_avgs = {
+                label: week_csat[col].mean()
+                for label, col in CSAT_FACTORS.items()
+            }
+            factor_df = pd.DataFrame.from_dict(
+                factor_avgs, orient="index", columns=["Avg Score"]
+            ).round(2).sort_values("Avg Score")
+            st.bar_chart(factor_df, height=200)
+
+        # ── Peak vs off-peak CSAT ──────────────────────────────────────────────
+        peak_mask    = week_csat["visit_hour"].isin([12, 13, 18, 19])
+        peak_csat    = week_csat[peak_mask]["csat_score"].mean()
+        offpeak_csat = week_csat[~peak_mask]["csat_score"].mean()
+
+        if not (pd.isna(peak_csat) or pd.isna(offpeak_csat)):
+            diff = peak_csat - offpeak_csat
+            diff_str = f"{'+' if diff >= 0 else ''}{diff:.2f}"
+            impact   = (
+                "better at peak 🟢" if diff > 0.05
+                else "worse at peak — staffing pressure showing 🔴" if diff < -0.1
+                else "similar across peak/off-peak"
+            )
+            st.caption(
+                f"**Peak hours (12–13, 18–19):** CSAT = **{peak_csat:.2f}**  ·  "
+                f"Off-peak: **{offpeak_csat:.2f}**  ·  "
+                f"Δ {diff_str} — {impact}"
+            )
+
+        # ── Hourly CSAT trend ──────────────────────────────────────────────────
+        hourly_csat = (
+            week_csat.groupby("visit_hour")["csat_score"]
+            .mean().round(2).reset_index()
+            .rename(columns={"visit_hour": "Hour", "csat_score": "Avg CSAT"})
+        )
+        if len(hourly_csat) >= 3:
+            st.caption("**CSAT by Visit Hour**  ·  🔴 Peak hours: 12:00 and 18:00")
+            st.line_chart(hourly_csat.set_index("Hour"), height=160)
 
 # ═════════════════════════════════════════════════════════════════════════════
 # SIDEBAR — controls for selected week
