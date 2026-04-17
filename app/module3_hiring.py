@@ -45,7 +45,7 @@ def load_data():
 emp_df, hiring_df, survey_df, sales_df = load_data()
 
 # Merge employee names into survey
-emp_names = emp_df[["emp_id", "name", "role"]].rename(columns={"emp_id": "employee_id"})
+emp_names = emp_df[["emp_id", "name"]].rename(columns={"emp_id": "employee_id"})
 survey_df = survey_df.merge(emp_names, on="employee_id", how="left")
 
 # ── Constants ─────────────────────────────────────────────────────────────────
